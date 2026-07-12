@@ -81,6 +81,7 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version-file: AndroidLibXrayLite/go.mod
+        cache-dependency-path: AndroidLibXrayLite/go.sum
 
     - name: Build libv2ray
       run: |
@@ -159,7 +160,9 @@ jobs:
 
         test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\/[[:alnum:]_-]+\/.*\.so$/{print $2}' | sort -u)" = "arm64-v8a"
         unzip -p "$APK" lib/arm64-v8a/libgojni.so > "$RUNNER_TEMP/apk-libgojni.so"
-        cmp "$RUNNER_TEMP/libv2ray-aar/jni/arm64-v8a/libgojni.so" "$RUNNER_TEMP/apk-libgojni.so"
+        cp "$RUNNER_TEMP/libv2ray-aar/jni/arm64-v8a/libgojni.so" "$RUNNER_TEMP/aar-libgojni-stripped.so"
+        "$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$RUNNER_TEMP/aar-libgojni-stripped.so"
+        cmp "$RUNNER_TEMP/aar-libgojni-stripped.so" "$RUNNER_TEMP/apk-libgojni.so"
 
         go version -m "$RUNNER_TEMP/apk-libgojni.so" | tee "$GITHUB_WORKSPACE/verification/apk-go-build-info.txt"
         grep -F $'\tdep\tgithub.com/xtls/xray-core\t'"$XRAY_CORE_VERSION"$'\t'"$XRAY_CORE_SUM" "$GITHUB_WORKSPACE/verification/apk-go-build-info.txt"
