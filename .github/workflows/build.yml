@@ -16,6 +16,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_LIB_XRAY_COMMIT: ecf84ee82ac975c39852397351d1618a40df7cd2
+      XRAY_CORE_VERSION: v1.260327.1-0.20260711155151-50231eaff98c
+      XRAY_CORE_COMMIT: 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
+      XRAY_CORE_SUM: h1:SbB1ez0bqZllbzaVj0PC+Vje3dRA8m/7jW1ussjDSgM=
 
     steps:
     - name: Checkout code
@@ -47,30 +52,29 @@ jobs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ github.workspace }}/libs
-        key: libhevtun-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
+        key: libhevtun-arm64-v8a-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
 
     - name: Build libhevtun
       if: steps.cache-libhevtun-restore.outputs.cache-hit != 'true'
       run: |
-        bash compile-hevtun.sh
-    
+        ABIS=arm64-v8a bash compile-hevtun.sh
+
     - name: Save libhevtun
       if: steps.cache-libhevtun-restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: ${{ github.workspace }}/libs
-        key: libhevtun-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
+        key: libhevtun-arm64-v8a-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
 
     - name: Copy libhevtun
       run: |
         cp -r ${{ github.workspace }}/libs ${{ github.workspace }}/V2rayNG/app
 
-    - name: Fetch AndroidLibXrayLite tag
+    - name: Verify AndroidLibXrayLite revision
       run: |
         pushd AndroidLibXrayLite
-        CURRENT_TAG=$(git describe --tags --abbrev=0)
-        echo "Current tag in this repo: $CURRENT_TAG"
-        echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
+        test "$(git rev-parse HEAD)" = "$ANDROID_LIB_XRAY_COMMIT"
+        test "$(git describe --tags --exact-match HEAD)" = "v26.7.11"
         popd
 
     - name: Setup Golang
@@ -80,15 +84,48 @@ jobs:
 
     - name: Build libv2ray
       run: |
+        mkdir -p "$GITHUB_WORKSPACE/verification"
         pushd AndroidLibXrayLite
+        go mod edit -dropreplace=github.com/xtls/xray-core
         mkdir -p assets data
         bash gen_assets.sh download
         cp -v data/*.dat assets/
-        go install golang.org/x/mobile/cmd/gomobile@latest
+        go mod tidy
+
+        RESOLVED_XRAY=$(go list -m -f '{{if .Replace}}{{.Replace.Path}}@{{.Replace.Version}}{{else}}{{.Path}}@{{.Version}}{{end}}' github.com/xtls/xray-core)
+        test "$RESOLVED_XRAY" = "github.com/xtls/xray-core@$XRAY_CORE_VERSION"
+
+        go mod download -json github.com/xtls/xray-core > "$GITHUB_WORKSPACE/verification/xray-core-module.json"
+        XRAY_INFO=$(jq -r '.Info' "$GITHUB_WORKSPACE/verification/xray-core-module.json")
+        test "$(jq -r '.Sum' "$GITHUB_WORKSPACE/verification/xray-core-module.json")" = "$XRAY_CORE_SUM"
+        test "$(jq -r '.Origin.URL' "$XRAY_INFO")" = "https://github.com/xtls/xray-core"
+        test "$(jq -r '.Origin.Hash' "$XRAY_INFO")" = "$XRAY_CORE_COMMIT"
+        cp "$XRAY_INFO" "$GITHUB_WORKSPACE/verification/xray-core.info"
+
+        XRAY_DIR=$(go list -m -f '{{.Dir}}' github.com/xtls/xray-core)
+        {
+          grep -F 'Version_x byte = 26' "$XRAY_DIR/core/core.go"
+          grep -F 'Version_y byte = 7' "$XRAY_DIR/core/core.go"
+          grep -F 'Version_z byte = 11' "$XRAY_DIR/core/core.go"
+        } | tee "$GITHUB_WORKSPACE/verification/xray-core-version-source.txt"
+        go mod verify | tee "$GITHUB_WORKSPACE/verification/go-mod-verify.txt"
+
+        MOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+        go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
         export PATH=$PATH:~/go/bin
         gomobile init
-        go mod tidy
-        gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
+        gomobile bind -v -target=android/arm64 -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
+
+        rm -rf "$RUNNER_TEMP/libv2ray-aar"
+        unzip -q libv2ray.aar -d "$RUNNER_TEMP/libv2ray-aar"
+        test "$(find "$RUNNER_TEMP/libv2ray-aar/jni" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" = "arm64-v8a"
+        go version -m "$RUNNER_TEMP/libv2ray-aar/jni/arm64-v8a/libgojni.so" | tee "$GITHUB_WORKSPACE/verification/aar-go-build-info.txt"
+        grep -F $'\tdep\tgithub.com/xtls/xray-core\t'"$XRAY_CORE_VERSION"$'\t'"$XRAY_CORE_SUM" "$GITHUB_WORKSPACE/verification/aar-go-build-info.txt"
+        if grep -F 'github.com/autorepobot/xray-core' "$GITHUB_WORKSPACE/verification/aar-go-build-info.txt"; then
+          echo "Unexpected replacement Xray module in libv2ray.aar" >&2
+          exit 1
+        fi
+        sha256sum "$RUNNER_TEMP/libv2ray-aar/jni/arm64-v8a/libgojni.so" | tee "$GITHUB_WORKSPACE/verification/aar-libgojni.sha256"
         popd
         mkdir -p V2rayNG/app/libs
         cp AndroidLibXrayLite/libv2ray.aar V2rayNG/app/libs/
@@ -112,35 +149,46 @@ jobs:
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
         ./gradlew licenseFdroidReleaseReport
-        ./gradlew assembleRelease -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
-    
-    - name: Upload arm64-v8a APK
+        ./gradlew assembleFdroidRelease -PABI_FILTERS=arm64-v8a -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
+
+    - name: Verify ARM64 APK
+      run: |
+        mapfile -t APKS < <(find V2rayNG/app/build/outputs/apk/fdroid/release -type f -name '*arm64-v8a*.apk')
+        test "${#APKS[@]}" -eq 1
+        APK="${APKS[0]}"
+
+        test "$(unzip -Z1 "$APK" | awk -F/ '/^lib\/[[:alnum:]_-]+\/.*\.so$/{print $2}' | sort -u)" = "arm64-v8a"
+        unzip -p "$APK" lib/arm64-v8a/libgojni.so > "$RUNNER_TEMP/apk-libgojni.so"
+        cmp "$RUNNER_TEMP/libv2ray-aar/jni/arm64-v8a/libgojni.so" "$RUNNER_TEMP/apk-libgojni.so"
+
+        go version -m "$RUNNER_TEMP/apk-libgojni.so" | tee "$GITHUB_WORKSPACE/verification/apk-go-build-info.txt"
+        grep -F $'\tdep\tgithub.com/xtls/xray-core\t'"$XRAY_CORE_VERSION"$'\t'"$XRAY_CORE_SUM" "$GITHUB_WORKSPACE/verification/apk-go-build-info.txt"
+        if grep -F 'github.com/autorepobot/xray-core' "$GITHUB_WORKSPACE/verification/apk-go-build-info.txt"; then
+          echo "Unexpected replacement Xray module in APK" >&2
+          exit 1
+        fi
+
+        {
+          echo "AndroidLibXrayLite commit: $ANDROID_LIB_XRAY_COMMIT"
+          echo "Xray-core module: github.com/xtls/xray-core@$XRAY_CORE_VERSION"
+          echo "Xray-core upstream commit: $XRAY_CORE_COMMIT"
+          echo "Xray-core module sum: $XRAY_CORE_SUM"
+          echo "APK: $(basename "$APK")"
+          sha256sum "$APK"
+          sha256sum "$RUNNER_TEMP/apk-libgojni.so"
+        } | tee "$GITHUB_WORKSPACE/verification/xray-core-build-evidence.txt"
+
+        cat "$GITHUB_WORKSPACE/verification/xray-core-build-evidence.txt" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload ARM64 APK and verification evidence
       uses: actions/upload-artifact@v7
       if: ${{  success() }}
       with:
-        name: arm64-v8a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*arm64-v8a*.apk
-
-    - name: Upload armeabi-v7a APK
-      uses: actions/upload-artifact@v7
-      if: ${{  success() }}
-      with:
-        name: armeabi-v7a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*armeabi-v7a*.apk
-
-    - name: Upload x86 APK
-      uses: actions/upload-artifact@v7
-      if: ${{  success() }}
-      with:
-        name: x86-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*x86*.apk
-
-    - name: Upload universal APK
-      uses: actions/upload-artifact@v7
-      if: ${{ success() }}
-      with:
-        name: universal-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*universal*.apk
+        name: v2rayNG-arm64-v8a-xray-v26.7.11
+        if-no-files-found: error
+        path: |
+          ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/fdroid/release/*arm64-v8a*.apk
+          ${{ github.workspace }}/verification/
 
   sign-and-release:
     needs: build
