@@ -17,7 +17,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      ANDROID_LIB_XRAY_COMMIT: ecf84ee82ac975c39852397351d1618a40df7cd2
+      ANDROID_LIB_XRAY_COMMIT: f09fd73c82c85ce5ea7a676ea46f8b7669102e43
       XRAY_CORE_VERSION: v1.260327.1-0.20260711155151-50231eaff98c
       XRAY_CORE_COMMIT: 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
       XRAY_CORE_SUM: h1:SbB1ez0bqZllbzaVj0PC+Vje3dRA8m/7jW1ussjDSgM=
@@ -74,7 +74,7 @@ jobs:
       run: |
         pushd AndroidLibXrayLite
         test "$(git rev-parse HEAD)" = "$ANDROID_LIB_XRAY_COMMIT"
-        test "$(git describe --tags --exact-match HEAD)" = "v26.7.11"
+        test "$(git describe --tags --exact-match HEAD)" = "v26.7.19"
         popd
 
     - name: Setup Golang
@@ -87,7 +87,6 @@ jobs:
       run: |
         mkdir -p "$GITHUB_WORKSPACE/verification"
         pushd AndroidLibXrayLite
-        go mod edit -dropreplace=github.com/xtls/xray-core
         mkdir -p assets data
         bash gen_assets.sh download
         cp -v data/*.dat assets/
