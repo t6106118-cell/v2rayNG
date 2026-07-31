@@ -17,7 +17,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      ANDROID_LIB_XRAY_COMMIT: d1d167b508457ebfd650c9e99bfca50c054c98df
+      ANDROID_LIB_XRAY_COMMIT: b21389865ed69ba01e81c1521965c27832a33cf9
       XRAY_CORE_VERSION: v1.260327.1-0.20260728075948-5ca6f4b7d4dc
       XRAY_CORE_COMMIT: 5ca6f4b7d4dc20a881d4330e498892697627ec0c
       XRAY_CORE_SUM: h1:fkOkmgHWbF2Q8MdV9VxrsyxRz4OndcrUXUkh1ANBTg0=
@@ -74,7 +74,7 @@ jobs:
       run: |
         pushd AndroidLibXrayLite
         test "$(git rev-parse HEAD)" = "$ANDROID_LIB_XRAY_COMMIT"
-        test "$(git describe --tags --exact-match HEAD)" = "v26.7.28"
+        test "$(git describe --tags --exact-match HEAD)" = "v26.7.31"
         popd
 
     - name: Setup Golang
